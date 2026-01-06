@@ -20,8 +20,27 @@ def data_quality_check(df):
     print(f"   总列数: {df.shape[1]}")
     print(f"   内存使用: {df.memory_usage(deep=True).sum() / (1024**2):.2f} MB")
     
+    # 检查budget列分布（新增）
+    print("\n2. Budget列分布检查:")
+    if 'budget' in df.columns:
+        budget_stats = df['budget'].describe()
+        print(f"   预算最小值: ${budget_stats['min']:,.0f}")
+        print(f"   预算中位数: ${budget_stats['50%']:,.0f}")
+        print(f"   预算平均值: ${budget_stats['mean']:,.0f}")
+        print(f"   预算最大值: ${budget_stats['max']:,.0f}")
+        
+        # 统计budget小于100000的记录
+        low_budget_count = (df['budget'] < 100000).sum()
+        low_budget_percent = (low_budget_count / len(df)) * 100
+        print(f"\n   budget < $100,000的记录数: {low_budget_count} ({low_budget_percent:.1f}%)")
+        
+        if low_budget_count > 0:
+            print("   这些记录可能是非商业电影或数据质量问题，建议检查")
+    else:
+        print("   数据集中没有budget列")
+    
     # 缺失值分析
-    print("\n2. 缺失值分析:")
+    print("\n3. 缺失值分析:")
     missing_values = df.isnull().sum()
     missing_percent = (missing_values / len(df)) * 100
     missing_df = pd.DataFrame({
@@ -39,13 +58,13 @@ def data_quality_check(df):
         print("   没有发现缺失值")
     
     # 数据类型检查
-    print("\n3. 数据类型分布:")
+    print("\n4. 数据类型分布:")
     dtype_counts = df.dtypes.value_counts()
     for dtype, count in dtype_counts.items():
         print(f"   {dtype}: {count} 列")
     
     # 重复值检查
-    print("\n4. 重复行检查:")
+    print("\n5. 重复行检查:")
     duplicates = df.duplicated().sum()
     if duplicates > 0:
         print(f"   发现 {duplicates} 个重复行")
@@ -56,62 +75,107 @@ def data_quality_check(df):
     
     return missing_df
 
-def handle_missing_values(df, strategy='median'):
+def handle_missing_values(df, strategy='median', min_budget_threshold=100000):
     """
-    处理缺失值
+    处理缺失值，并删除budget小于指定阈值的数据
     """
     print("\n" + "=" * 60)
-    print("缺失值处理")
+    print("数据清洗处理")
     print("=" * 60)
     
     df_clean = df.copy()
-    missing_before = df.isnull().sum().sum()
+    original_count = len(df_clean)
+    
+    print(f"处理前数据行数: {original_count}")
+    
+    # 第一步：删除budget小于阈值的数据
+    print("\n1. 处理预算过低的数据:")
+    if 'budget' in df_clean.columns:
+        # 统计要删除的记录
+        low_budget_mask = df_clean['budget'] < min_budget_threshold
+        low_budget_count = low_budget_mask.sum()
+        
+        if low_budget_count > 0:
+            print(f"   发现 {low_budget_count} 条预算低于${min_budget_threshold:,}的记录")
+            
+            # 显示部分要删除的记录信息
+            low_budget_samples = df_clean[low_budget_mask].head(5)
+            print(f"   示例记录（前5条）:")
+            for idx, row in low_budget_samples.iterrows():
+                title = row.get('title', 'Unknown') if 'title' in df_clean.columns else f"ID: {idx}"
+                budget = row['budget']
+                print(f"     - {title}: 预算=${budget:,.0f}")
+            
+            # 删除这些记录
+            df_clean = df_clean[~low_budget_mask].copy()
+            print(f"   已删除 {low_budget_count} 条预算过低记录")
+        else:
+            print(f"   没有发现预算低于${min_budget_threshold:,}的记录")
+    else:
+        print("   数据集中没有budget列，跳过预算过滤")
+    
+    # 第二步：处理缺失值
+    print("\n2. 处理缺失值:")
+    missing_before = df_clean.isnull().sum().sum()
     
     if missing_before == 0:
-        print("没有缺失值需要处理")
-        return df_clean
-    
-    print(f"处理前总缺失值: {missing_before}")
-    
-    # 针对不同类型列采用不同策略
-    for column in df_clean.columns:
-        missing_count = df_clean[column].isnull().sum()
+        print("   没有缺失值需要处理")
+    else:
+        print(f"   处理前总缺失值: {missing_before}")
         
-        if missing_count > 0:
-            col_type = df_clean[column].dtype
+        # 针对不同类型列采用不同策略
+        for column in df_clean.columns:
+            missing_count = df_clean[column].isnull().sum()
             
-            if col_type in ['float64', 'int64']:
-                # 数值型列
-                if strategy == 'median':
-                    fill_value = df_clean[column].median()
-                elif strategy == 'mean':
-                    fill_value = df_clean[column].mean()
-                elif strategy == 'mode':
-                    fill_value = df_clean[column].mode()[0]
-                else:  # zero
-                    fill_value = 0
-                    
-                df_clean[column].fillna(fill_value, inplace=True)
-                print(f"   {column}: 数值型，用{strategy}({fill_value:.2f})填充 {missing_count} 个缺失值")
+            if missing_count > 0:
+                col_type = df_clean[column].dtype
                 
-            elif col_type == 'object':
-                # 文本型列
-                if df_clean[column].nunique() < 20:  # 类别数少用众数
-                    fill_value = df_clean[column].mode()[0] if not df_clean[column].mode().empty else 'Unknown'
-                else:  # 类别数多用Unknown
-                    fill_value = 'Unknown'
+                if col_type in ['float64', 'int64']:
+                    # 数值型列
+                    if strategy == 'median':
+                        fill_value = df_clean[column].median()
+                    elif strategy == 'mean':
+                        fill_value = df_clean[column].mean()
+                    elif strategy == 'mode':
+                        fill_value = df_clean[column].mode()[0]
+                    else:  # zero
+                        fill_value = 0
+                        
+                    df_clean[column].fillna(fill_value, inplace=True)
+                    print(f"      {column}: 数值型，用{strategy}({fill_value:.2f})填充 {missing_count} 个缺失值")
                     
-                df_clean[column].fillna(fill_value, inplace=True)
-                print(f"   {column}: 文本型，用'{fill_value}'填充 {missing_count} 个缺失值")
-                
-            elif 'datetime' in str(col_type):
-                # 时间型列
-                df_clean[column].fillna(pd.NaT, inplace=True)
-                print(f"   {column}: 时间型，用NaT填充 {missing_count} 个缺失值")
+                elif col_type == 'object':
+                    # 文本型列
+                    if df_clean[column].nunique() < 20:  # 类别数少用众数
+                        fill_value = df_clean[column].mode()[0] if not df_clean[column].mode().empty else 'Unknown'
+                    else:  # 类别数多用Unknown
+                        fill_value = 'Unknown'
+                        
+                    df_clean[column].fillna(fill_value, inplace=True)
+                    print(f"      {column}: 文本型，用'{fill_value}'填充 {missing_count} 个缺失值")
+                    
+                elif 'datetime' in str(col_type):
+                    # 时间型列
+                    df_clean[column].fillna(pd.NaT, inplace=True)
+                    print(f"      {column}: 时间型，用NaT填充 {missing_count} 个缺失值")
+        
+        missing_after = df_clean.isnull().sum().sum()
+        print(f"\n   处理后总缺失值: {missing_after}")
+        if missing_before > 0:
+            print(f"   清理了 {missing_before - missing_after} 个缺失值")
     
-    missing_after = df_clean.isnull().sum().sum()
-    print(f"\n处理后总缺失值: {missing_after}")
-    print(f"清理了 {missing_before - missing_after} 个缺失值")
+    # 第三步：显示清理结果
+    print(f"\n3. 清理结果:")
+    print(f"   原始数据行数: {original_count}")
+    print(f"   清理后数据行数: {len(df_clean)}")
+    print(f"   总共删除记录数: {original_count - len(df_clean)}")
+    
+    if 'budget' in df_clean.columns:
+        remaining_low_budget = (df_clean['budget'] < min_budget_threshold).sum()
+        if remaining_low_budget == 0:
+            print(f"已成功移除所有预算低于${min_budget_threshold:,}的记录")
+        else:
+            print(f" 仍有 {remaining_low_budget} 条预算低于${min_budget_threshold:,}的记录")
     
     return df_clean
 
@@ -377,32 +441,55 @@ def summary_statistics(df):
         
         print(cat_summary)
 
-def analyze_movies(df):
+def analyze_movies(df, min_budget_threshold=100000):
     """
     完整的电影数据分析流程
     """
     print("开始电影数据分析")
     print("=" * 70)
+    print(f"预算过滤阈值: ${min_budget_threshold:,}")
+    print("=" * 70)
     
     # 1. 数据质量检查
     missing_df = data_quality_check(df)
     
-    # 2. 处理缺失值
-    df_clean = handle_missing_values(df)
+    # 2. 处理缺失值并删除低预算数据
+    df_clean = handle_missing_values(df, min_budget_threshold=min_budget_threshold)
     
-    # 3. 异常值检测
+    # 3. 显示清理后的budget统计信息
+    print("\n" + "=" * 60)
+    print("清理后Budget统计信息")
+    print("=" * 60)
+    if 'budget' in df_clean.columns:
+        budget_stats = df_clean['budget'].describe()
+        print(f"预算统计（已删除低于${min_budget_threshold:,}的记录）:")
+        print(f"   最小值: ${budget_stats['min']:,.0f}")
+        print(f"   平均值: ${budget_stats['mean']:,.0f}")
+        print(f"   中位数: ${budget_stats['50%']:,.0f}")
+        print(f"   最大值: ${budget_stats['max']:,.0f}")
+        print(f"   标准差: ${budget_stats['std']:,.0f}")
+        print(f"   有效记录数: {int(budget_stats['count'])}")
+        
+        # 验证清理效果
+        remaining_low_budget = (df_clean['budget'] < min_budget_threshold).sum()
+        if remaining_low_budget == 0:
+            print("已成功移除所有预算过低的记录")
+        else:
+            print(f"仍有 {remaining_low_budget} 条预算低于${min_budget_threshold:,}的记录")
+    
+    # 4. 异常值检测
     outlier_analysis(df_clean)
     
-    # 4. 基本分布分析
+    # 5. 基本分布分析
     basic_distribution_analysis(df_clean)
     
-    # 5. 相关性分析
+    # 6. 相关性分析
     correlation_analysis(df_clean)
     
-    # 6. 分类变量分析
+    # 7. 分类变量分析
     categorical_analysis(df_clean)
     
-    # 7. 汇总统计
+    # 8. 汇总统计
     summary_statistics(df_clean)
     
     print("\n" + "=" * 70)
@@ -413,20 +500,39 @@ def analyze_movies(df):
 
 # 使用示例
 if __name__ == "__main__":
-    # 导入数据加载函数
-    from make_dataset import load_movie_data
-    
-    # 加载数据
-    print("加载电影数据...")
-    df = load_movie_data()
+
+    try:
+        from make_dataset import load_movie_data
+        print("加载电影数据...")
+        df = load_movie_data()
+    except ImportError:
+        print("从CSV文件加载数据...")
+        data_file = 'data/raw/movies.csv'  
+        if os.path.exists(data_file):
+            df = pd.read_csv(data_file)
+        else:
+            print(f"错误：找不到数据文件 {data_file}")
+            print("请提供示例数据或修改文件路径")
+            # 创建示例数据用于测试
+            df = pd.DataFrame({
+                'title': ['Movie1', 'Movie2', 'Movie3', 'Movie4'],
+                'budget': [50000, 150000, 1000000, 200000],  # 包含低于100000的记录
+                'revenue': [200000, 500000, 5000000, 1000000],
+                'vote_average': [7.5, 6.8, 8.2, 7.0],
+                'genres': ['Action', 'Comedy', 'Drama', 'Action']
+            })
     
     if df is not None:
+        # 设置预算过滤阈值
+        MIN_BUDGET_THRESHOLD = 100000  # 删除budget < 100000的记录
+        
         # 执行完整分析
-        df_clean = analyze_movies(df)
+        df_clean = analyze_movies(df, min_budget_threshold=MIN_BUDGET_THRESHOLD)
         
         # 保存清理后的数据
-        output_path = 'data/processed/movies_cleaned.csv'
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        output_dir = r'D:\desktop\wenjianjia\buxiangbiancheng\lianxi\movie-analysis-project\data\processed'
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, 'movies_cleaned_new.csv')
         df_clean.to_csv(output_path, index=False)
         print(f"\n清理后的数据已保存到: {output_path}")
         
@@ -436,7 +542,15 @@ if __name__ == "__main__":
         print("=" * 70)
         print(f"原始数据大小: {df.shape}")
         print(f"清理后数据大小: {df_clean.shape}")
-        print(f"处理缺失值数量: {df.isnull().sum().sum() - df_clean.isnull().sum().sum()}")
+        print(f"删除的记录数: {df.shape[0] - df_clean.shape[0]}")
+        
+        # 特别显示budget处理情况
+        if 'budget' in df.columns and 'budget' in df_clean.columns:
+            original_low_budget = (df['budget'] < MIN_BUDGET_THRESHOLD).sum()
+            cleaned_low_budget = (df_clean['budget'] < MIN_BUDGET_THRESHOLD).sum()
+            print(f"预算过滤情况: 删除了 {original_low_budget} 条预算<${MIN_BUDGET_THRESHOLD:,}的记录")
+            print(f"剩余预算范围: ${df_clean['budget'].min():,.0f} - ${df_clean['budget'].max():,.0f}")
+        
         print(f"数值列数量: {len(df_clean.select_dtypes(include=['float64', 'int64']).columns)}")
         print(f"分类列数量: {len(df_clean.select_dtypes(include=['object']).columns)}")
         print("=" * 70)

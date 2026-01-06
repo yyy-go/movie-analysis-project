@@ -52,7 +52,7 @@ def load_and_preprocess_data(filepath):
     df['vote_average'] = pd.to_numeric(df['vote_average'],errors='coerce')
 
     #处理release_date
-    df['release_year'] = pd.to_datetime(df['release_year'], errors='coerce')
+    #df['release_year'] = pd.to_datetime(df['release_year'], errors='coerce')
 
     print(f"\n处理后数据形状：{df.shape}")
     print(f"ROI统计信息")
@@ -91,6 +91,14 @@ def exploratory_analysis(df):
     #按年份的ROI趋势
     plt.subplot(2, 3, 5)
     yearly_roi = df.groupby('release_year')['ROI'].mean()
+    # 调试：查看数据
+    print(f"年份数据形状: {yearly_roi.shape}")
+    print(f"前10个年份的ROI:")
+    print(yearly_roi.head(10))
+    print(f"数据类型: {yearly_roi.dtype}")
+    print(f"缺失值数量: {yearly_roi.isnull().sum()}")
+    print(f"有效数据数量: {yearly_roi.notnull().sum()}")
+    print(f"所有年份: {yearly_roi.index.tolist()[:20]}...")
     yearly_roi.plot()
     plt.title('按年份平均ROI')
     plt.xlabel('年份')
@@ -319,6 +327,25 @@ def extract_main_company(companies_data):
         return 'Unknown'
 
 
+def detect_extreme_outliers(df, column='ROI'):
+    """检测极端异常值"""
+    # 方法1：超过99.9百分位
+    p999 = df[column].quantile(0.999)
+    extreme_1 = df[df[column] > p999]
+    extreme_2 = df[df[column] > 1000]    
+    top_10 = df.nlargest(10, column)[['title', 'budget', 'revenue', 'ROI']]
+    
+    print(f"极端异常值检测 ({column}):")
+    print(f"  99.9%分位数: {p999:.2f}")
+    print(f"  超过99.9%分位数的数量: {len(extreme_1)}")
+    print(f"  ROI超过1000倍的数量: {len(extreme_2)}")
+    
+    print("\nROI最高的10部电影:")
+    print(top_10.to_string())
+    
+    return extreme_1, extreme_2, top_10
+
+
 if __name__ == "__main__":
     # 最基本的调用方式
     filepath = r"D:\desktop\wenjianjia\buxiangbiancheng\lianxi\movie-analysis-project\data\processed\movies_cleaned.csv"
@@ -326,8 +353,11 @@ if __name__ == "__main__":
     # 顺序执行三个主要函数
     df = load_and_preprocess_data(filepath)
     exploratory_analysis(df)
+    extreme_1, extreme_2, top_10 = detect_extreme_outliers(df, column='ROI')
+    if len(extreme_1) > 0:
+        print(f"\n99.9%分位数以上的电影（共{len(extreme_1)}部）:")
+        print(extreme_1[['title', 'budget', 'revenue', 'ROI', 'release_year']].head(10).to_string())
     df_featured = feature_engineering(df)
-    
     # 保存结果
     output_path = filepath.replace('.csv', '_with_features.csv')
     df_featured.to_csv(output_path, index=False)
